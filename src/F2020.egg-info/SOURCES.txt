@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+src/F2020.egg-info/PKG-INFO
+src/F2020.egg-info/SOURCES.txt
+src/F2020.egg-info/dependency_links.txt
+src/F2020.egg-info/requires.txt
+src/F2020.egg-info/top_level.txt

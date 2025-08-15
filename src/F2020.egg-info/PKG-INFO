@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: F2020
+Version: 0.1.0
+Summary: Paquete de apoyo para el curso F2020 Ecuaciones Diferenciales para la Física
+Author-email: Raul Gomez <rgomez@tec.mx>
+Requires-Dist: numpy
+Requires-Dist: matplotlib
+Requires-Dist: pyqt6
+Requires-Dist: scipy
