@@ -7,3 +7,4 @@ Requires-Dist: numpy
 Requires-Dist: matplotlib
 Requires-Dist: pyqt6
 Requires-Dist: scipy
+Requires-Dist: pandas
