@@ -512,7 +512,6 @@ def generate_interpretation(window: str,
     narrative = (
         (f"**Clasificación:** {class_name}\n\n" if class_name else "") +
         f"Patrón: **{label}** durante **{window.replace('_',' ')}**.\n\n"
-        f"Por qué lo creemos: {why_txt}\n\n"
     )
 
     references = (
