@@ -38,6 +38,82 @@ logging.basicConfig(
 logger = logging.getLogger("monterrey_air_rules")
 def _tol(v, r=0.10):  # ±10% para convertir valores puntuales en rangos tolerantes
     return (v*(1-r), v*(1+r))
+
+# ---------------------------------------------
+# Utilidades de tolerancia y coherencia NOx
+# ---------------------------------------------
+def _clip_tuple(t):
+    lo, hi = t
+    return (min(lo, hi), max(lo, hi))
+
+def _derive_nox_from_no_no2(bounds: dict, tol=0.10):
+    """
+    Impone NOX ≈ NO + NO2 con tolerancia ±tol.
+    Si falta NO o NO2, no modifica NOX.
+    """
+    if "NO" in bounds and "NO2" in bounds:
+        lo = bounds["NO"][0] + bounds["NO2"][0]
+        hi = bounds["NO"][1] + bounds["NO2"][1]
+        bounds["NOX"] = (lo * (1 - tol), hi * (1 + tol))
+    return bounds
+
+def enforce_nox_sum_on_templates(templates, tol=0.10):
+    out = []
+    for t in templates:
+        b = dict(t["bounds"])
+        t = dict(t)
+        t["bounds"] = _derive_nox_from_no_no2(b, tol=tol)
+        out.append(t)
+    return out
+
+# ---------------------------------------------
+# Motor de reglas: k-of-n + par prioritario (NOX, O3)
+# ---------------------------------------------
+from typing import Dict as _Dict, Tuple as _Tuple, List as _List
+
+def _in_range(val, rng: _Tuple[float, float], eps=1e-9):
+    lo, hi = _clip_tuple(rng)
+    return (val is not None) and (lo - eps <= float(val) <= hi + eps)
+
+def score_cluster(
+    sample: _Dict[str, float],
+    bounds: _Dict[str, _Tuple[float, float]],
+    k_required: int = 5,
+    priority_pair: _Tuple[str, str] = ("NOX", "O3"),
+):
+    matched = []
+    for k, rng in bounds.items():
+        if k in sample and _in_range(sample[k], rng):
+            matched.append(k)
+
+    priority_ok = all(
+        (p in bounds) and (p in sample) and _in_range(sample[p], bounds[p])
+        for p in priority_pair
+    )
+    match = priority_ok and (len(matched) >= k_required)
+    return match, len(matched), matched
+
+def classify_sample(
+    sample: _Dict[str, float],
+    templates,
+    k_required: int = 5,
+    priority_pair: _Tuple[str, str] = ("NOX", "O3"),
+):
+    """
+    Devuelve el mejor cluster por score, respetando el par prioritario.
+    """
+    best = None
+    for t in templates:
+        m, s, keys = score_cluster(sample, t["bounds"], k_required, priority_pair)
+        rec = {"id": t["id"], "name": t["name"], "match": m, "score": s, "matched_keys": keys}
+        if (best is None) or (s > best["score"]) or (s == best["score"] and m and not best["match"]):
+            best = rec
+    return best
+
+
+
+
+
 # -----------------------------------------------------------------------------
 # I/O DE DATOS
 # -----------------------------------------------------------------------------
@@ -471,51 +547,82 @@ def render_simulator() -> None:
 def _tol(v, r=0.10):  # ±10% para convertir valores puntuales en rangos tolerantes
     return (v*(1-r), v*(1+r))
 
+# -------------------------------------------------------------------
+# PLANTILLAS DE CLÚSTERES (NOX derivado de NO+NO2; ±10% de tolerancia)
+# -------------------------------------------------------------------
 CLUSTER_TEMPLATES = [
     {
         "id": 0,
         "name": "Clúster de Emisiones por Tráfico Intenso",
         "bounds": {
-            "NOX": (47, 57), "NO": (13, 30), "NO2": (26, 30),
-            "PM10": (61, 95), "PM2.5": (18, 31), "CO": (1.5, 2.0), "O3": (6, 22)
+            "NO":   (13, 30),
+            "NO2":  (26, 30),
+            "PM10": (61, 95),
+            "PM2.5": (18, 31),
+            "CO":   (1.5, 2.0),
+            "O3":   (6, 22),
+            # "SO2" opcional según datos
         }
     },
     {
         "id": 1,
-        "name": "Clúster de Formación Fotoquímica de Ozono e Industrial",
+        "name": "Clúster de Formación Fotoquímica e Industrial",
         "bounds": {
-            "NOX": (11, 12), "NO": _tol(4.0), "NO2": _tol(7.0),
-            "PM10": _tol(41.0), "PM2.5": _tol(11.0), "CO": _tol(1.3), "O3": (19, 53)
+            "NO":    _tol(4.0),
+            "NO2":   _tol(7.0),
+            "PM10":  _tol(41.0),
+            "PM2.5": _tol(11.0),
+            "CO":    _tol(1.3),
+            "O3":    (19, 53),
+            "SO2":   (4, 8),   # añade trazo industrial
         }
     },
     {
         "id": 2,
         "name": "Clúster de Fuentes Mixtas Urbanas Estándar",
         "bounds": {
-            "NOX": (20, 51), "CO": (0.9, 1.6), "PM10": (35, 71),
-            "PM2.5": (8, 22), "O3": (9, 37), "NO": (3, 23),
-            "NO2": (15, 23), "SO2": (3, 4)
+            # NOX derivará ≈ 18–46 antes de tolerancia
+            "NO":    (3, 23),
+            "NO2":   (15, 23),
+            "PM10":  (35, 71),
+            "PM2.5": (8, 22),
+            "CO":    (0.9, 1.6),
+            "O3":    (9, 37),
+            "SO2":   (3, 4),
         }
     },
     {
         "id": 3,
-        "name": "Clúster de Fondo Urbano Bajo con Bajo CO y PM",
+        "name": "Clúster de Fondo Urbano Bajo (CO y PM bajos)",
         "bounds": {
-            "NOX": (11, 24), "CO": (0.6, 0.7), "PM10": (34, 41),
-            "PM2.5": (9, 10), "O3": (11, 36), "NO": (4, 8),
-            "NO2": (7, 14), "SO2": _tol(2.6)
+            # NOX derivará ≈ 11–22 antes de tolerancia
+            "NO":    (4, 8),
+            "NO2":   (7, 14),
+            "PM10":  (34, 41),
+            "PM2.5": (9, 10),
+            "CO":    (0.6, 0.7),
+            "O3":    (11, 36),
+            "SO2":   _tol(2.6),
         }
     },
     {
         "id": 4,
-        "name": "Clúster de Baja Contaminación con Medio O3 y Bajo NOX",
+        "name": "Clúster de Baja Contaminación (O3 medio, NOx bajo)",
         "bounds": {
-            "NOX": (8, 10), "CO": (1.0, 1.5), "PM10": (40, 58),
-            "PM2.5": (10, 16), "O3": (23, 45), "NO": (2, 3),
-            "NO2": (6, 7), "SO2": (3, 4)
+            "NO":    (2, 3),
+            "NO2":   (6, 7),
+            "PM10":  (40, 58),
+            "PM2.5": (10, 16),
+            "CO":    (1.0, 1.5),
+            "O3":    (23, 45),
+            "SO2":   (3, 4),
         }
     }
 ]
+
+# Enforce: recalcula NOX = NO + NO2 con ±10%
+CLUSTER_TEMPLATES = enforce_nox_sum_on_templates(CLUSTER_TEMPLATES, tol=0.10)
+
 
 # -------------------------------------------------------------------
 # UTILIDADES PARA APROXIMACIÓN Y CENTROIDES
